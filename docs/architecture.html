@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Project 4 — AI Firewall Architecture & Flow</title>
+<style>
+  :root {
+    --bg: #0b1020;
+    --bg-soft: #11172e;
+    --card: #161d3a;
+    --card-2: #1b234a;
+    --text: #e7ecff;
+    --muted: #aab3d4;
+    --accent: #28d6a8;
+    --accent-2: #5b8cff;
+    --warn: #ffb454;
+    --danger: #ff6a7a;
+    --ok: #66e3a1;
+    --border: #2a3360;
+    --line: #3a4781;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 10% -10%, #1a2350 0%, transparent 60%),
+                radial-gradient(900px 500px at 110% 10%, #0f3b3a 0%, transparent 50%),
+                var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  header {
+    padding: 56px 24px 32px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+  }
+  header .pill {
+    display: inline-block;
+    background: var(--accent-2);
+    color: #0b1230;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    text-transform: uppercase;
+  }
+  header h1 {
+    font-size: clamp(26px, 4vw, 40px);
+    margin: 14px 0 8px;
+  }
+  header p.tagline {
+    color: var(--muted);
+    margin: 0 auto;
+    max-width: 720px;
+  }
+
+  main {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 32px 20px 80px;
+  }
+
+  section { margin-top: 56px; }
+  section h2 {
+    font-size: 22px;
+    margin: 0 0 6px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent);
+    display: inline-block;
+  }
+  section .sub {
+    color: var(--muted);
+    margin: 0 0 20px;
+  }
+
+  /* ========== DIAGRAM 1 - HIGH LEVEL ARCHITECTURE ========== */
+  .diagram {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 30px 20px;
+    overflow-x: auto;
+  }
+
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 18px;
+    min-width: 900px;
+  }
+
+  .tier {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 16px;
+    align-items: center;
+  }
+  .tier-label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-align: right;
+    padding-right: 10px;
+    border-right: 2px dashed var(--line);
+  }
+  .tier-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .node {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    min-width: 150px;
+    flex: 1;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+  }
+  .node:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .node .title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--accent-2);
+  }
+  .node .desc {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+  .node.client { border-color: var(--warn); }
+  .node.client .title { color: var(--warn); }
+  .node.gateway { border-color: var(--accent); }
+  .node.gateway .title { color: var(--accent); }
+  .node.detection { border-color: var(--danger); }
+  .node.detection .title { color: var(--danger); }
+  .node.backend { border-color: var(--accent-2); }
+  .node.backend .title { color: var(--accent-2); }
+  .node.storage { border-color: #b388ff; }
+  .node.storage .title { color: #b388ff; }
+  .node.observ { border-color: #ffd166; }
+  .node.observ .title { color: #ffd166; }
+
+  .arrow-down {
+    height: 22px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: var(--line);
+    font-size: 22px;
+  }
+
+  /* ========== DIAGRAM 2 - REQUEST FLOW ========== */
+  .flow-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  .flow-step {
+    background: var(--card-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    width: min(640px, 100%);
+    position: relative;
+  }
+  .flow-step .num {
+    position: absolute;
+    left: -14px;
+    top: -14px;
+    width: 32px; height: 32px;
+    background: var(--accent);
+    color: #062a22;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .flow-step h4 { margin: 0 0 4px; font-size: 15px; color: var(--accent-2); }
+  .flow-step p { margin: 0; font-size: 13px; color: var(--muted); }
+  .flow-step.decision {
+    border-color: var(--warn);
+    background: linear-gradient(180deg, #2a1c0a 0%, #1a1206 100%);
+  }
+  .flow-step.decision .num {
+    background: var(--warn);
+    color: #2a1c0a;
+  }
+  .flow-step.decision h4 { color: var(--warn); }
+  .flow-step.decision p { color: #ffe8c2; }
+
+  .flow-step.block {
+    border-color: var(--danger);
+    background: linear-gradient(180deg, #2a0a13 0%, #1a060a 100%);
+    width: min(420px, 100%);
+  }
+  .flow-step.block .num {
+    background: var(--danger);
+    color: #2a0a13;
+  }
+  .flow-step.block h4 { color: var(--danger); }
+  .flow-step.block p { color: #ffd0d6; }
+
+  .flow-arrow {
+    width: 2px;
+    height: 28px;
+    background: var(--line);
+    position: relative;
+  }
+  .flow-arrow::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid var(--line);
+  }
+
+  .branch-row {
+    display: flex;
+    gap: 24px;
+    width: min(640px, 100%);
+    justify-content: space-between;
+    align-items: stretch;
+  }
+  .branch-row .branch {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .branch .branch-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .branch .branch-label.no { background: rgba(255, 106, 122, 0.2); color: var(--danger); }
+  .branch .branch-label.yes { background: rgba(40, 214, 168, 0.2); color: var(--accent); }
+
+  /* ========== DIAGRAM 3 - SWISS CHEESE LAYERED DEFENCE ========== */
+  .cheese-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: center;
+  }
+  .cheese-layer {
+    background: linear-gradient(90deg, var(--card-2) 0%, var(--card) 100%);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    width: min(720px, 100%);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    position: relative;
+  }
+  .cheese-layer .badge {
+    flex: 0 0 auto;
+    width: 50px; height: 50px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    background: var(--accent);
+    color: #062a22;
+  }
+  .cheese-layer .body { flex: 1; }
+  .cheese-layer .body h4 { margin: 0 0 2px; font-size: 15px; }
+  .cheese-layer .body p { margin: 0; font-size: 13px; color: var(--muted); }
+  .cheese-layer .catches {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(40, 214, 168, 0.1);
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(40, 214, 168, 0.3);
+    text-align: center;
+    max-width: 180px;
+  }
+
+  /* ========== LEGEND ========== */
+  .legend {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-top: 14px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend .item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend .swatch {
+    width: 12px; height: 12px;
+    border-radius: 3px;
+  }
+
+  footer {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 24px;
+    border-top: 1px solid var(--border);
+    margin-top: 60px;
+  }
+
+  @media (max-width: 720px) {
+    .tier { grid-template-columns: 1fr; }
+    .tier-label {
+      text-align: left;
+      border-right: none;
+      border-bottom: 2px dashed var(--line);
+      padding: 0 0 6px 0;
+    }
+    .branch-row { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="pill">Project 04 · Architecture</span>
+  <h1>AI Firewall — Architecture &amp; Flow</h1>
+  <p class="tagline">Three clean diagrams that show what the system looks like, how a single request travels through it, and how the layered defence works.</p>
+</header>
+
+<main>
+
+  <!-- ============================================ -->
+  <!-- DIAGRAM 1: HIGH LEVEL ARCHITECTURE          -->
+  <!-- ============================================ -->
+  <section>
+    <h2>1 · The big picture</h2>
+    <p class="sub">Every box is a separate piece of the system. Read top → bottom. The arrows show where a request travels.</p>
+
+    <div class="diagram">
+      <div class="arch">
+
+        <!-- TIER 1: CLIENT -->
+        <div class="tier">
+          <div class="tier-label">Client</div>
+          <div class="tier-row">
+            <div class="node client">
+              <div class="title">User / App</div>
+              <div class="desc">Sends prompts. Could be a web app, mobile app, or another API.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-down">↓</div>
+
+        <!-- TIER 2: GATEWAY ENTRY -->
+        <div class="tier">
+          <div class="tier-label">Gateway entry</div>
+          <div class="tier-row">
+            <div class="node gateway">
+              <div class="title">FastAPI Proxy</div>
+              <div class="desc">The front door. Receives every request, returns every response.</div>
+            </div>
+            <div class="node gateway">
+              <div class="title">Auth + Rate Limit</div>
+              <div class="desc">Checks API key. Counts requests per user (uses Redis).</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-down">↓</div>
+
+        <!-- TIER 3: DETECTION PIPELINE -->
+        <div class="tier">
+          <div class="tier-label">Detection pipeline</div>
+          <div class="tier-row">
+            <div class="node detection">
+              <div class="title">L1 · XGBoost</div>
+              <div class="desc">Fast ML model. Yes/no malicious score. Built in W2.</div>
+            </div>
+            <div class="node detection">
+              <div class="title">L2 · LLM Judge</div>
+              <div class="desc">Slower second AI. Reads borderline prompts. Built in W3.</div>
+            </div>
+            <div class="node detection">
+              <div class="title">L3 · Doc Scanner</div>
+              <div class="desc">Scans PDFs, URLs, RAG chunks for hidden injections. Built in W4.</div>
+            </div>
+            <div class="node detection">
+              <div class="title">L4 · Canary Tokens</div>
+              <div class="desc">Plants secret words to detect data leaks. Built in W5.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-down">↓</div>
+
+        <!-- TIER 4: BACKEND ROUTER -->
+        <div class="tier">
+          <div class="tier-label">Backend router</div>
+          <div class="tier-row">
+            <div class="node backend">
+              <div class="title">OpenAI</div>
+              <div class="desc">GPT models (paid API).</div>
+            </div>
+            <div class="node backend">
+              <div class="title">Anthropic</div>
+              <div class="desc">Claude models (paid API).</div>
+            </div>
+            <div class="node backend">
+              <div class="title">Self-hosted Llama</div>
+              <div class="desc">Local model. Free. Built in W7.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-down">↓</div>
+
+        <!-- TIER 5: OUTPUT CHECK -->
+        <div class="tier">
+          <div class="tier-label">Output check</div>
+          <div class="tier-row">
+            <div class="node detection">
+              <div class="title">Canary Detector</div>
+              <div class="desc">Did the AI leak any secret canary token in its reply? If yes → block.</div>
+            </div>
+            <div class="node detection">
+              <div class="title">Output Filter</div>
+              <div class="desc">Strips PII / dangerous content before reply leaves the gateway.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="arrow-down">↓</div>
+
+        <!-- TIER 6: CLIENT BACK -->
+        <div class="tier">
+          <div class="tier-label">Response</div>
+          <div class="tier-row">
+            <div class="node client">
+              <div class="title">User / App ← reply</div>
+              <div class="desc">Receives a clean, safe reply (or a polite block message).</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SIDE TIERS -->
+        <div style="height: 30px;"></div>
+
+        <div class="tier">
+          <div class="tier-label">Storage (side)</div>
+          <div class="tier-row">
+            <div class="node storage">
+              <div class="title">Redis</div>
+              <div class="desc">Rate-limit counters, classifier cache, canary token registry.</div>
+            </div>
+            <div class="node storage">
+              <div class="title">SQLite / Postgres</div>
+              <div class="desc">Audit log of every prompt + verdict. Used for the OWASP report.</div>
+            </div>
+            <div class="node storage">
+              <div class="title">Datasets (training)</div>
+              <div class="desc">Lakera Gandalf + HuggingFace prompt-injection sets. Used to train XGBoost.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tier">
+          <div class="tier-label">Observability</div>
+          <div class="tier-row">
+            <div class="node observ">
+              <div class="title">OpenTelemetry</div>
+              <div class="desc">Standard logs + metrics + traces from every layer.</div>
+            </div>
+            <div class="node observ">
+              <div class="title">OWASP Test Harness</div>
+              <div class="desc">Runs all known attacks on every release. Outputs a 1-page posture report.</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="legend">
+        <div class="item"><div class="swatch" style="background: var(--warn)"></div> Client</div>
+        <div class="item"><div class="swatch" style="background: var(--accent)"></div> Gateway</div>
+        <div class="item"><div class="swatch" style="background: var(--danger)"></div> Detection</div>
+        <div class="item"><div class="swatch" style="background: var(--accent-2)"></div> Backend LLM</div>
+        <div class="item"><div class="swatch" style="background: #b388ff"></div> Storage</div>
+        <div class="item"><div class="swatch" style="background: #ffd166"></div> Observability</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <!-- DIAGRAM 2: REQUEST FLOW                     -->
+  <!-- ============================================ -->
+  <section>
+    <h2>2 · Life of a single request</h2>
+    <p class="sub">Follow one user prompt as it travels through the firewall. Yellow steps are decisions. Red steps mean the request was blocked.</p>
+
+    <div class="diagram">
+      <div class="flow-wrap">
+
+        <div class="flow-step">
+          <div class="num">1</div>
+          <h4>User sends a prompt</h4>
+          <p>Example: <em>“Summarise this PDF I uploaded.”</em> Hits the FastAPI gateway endpoint <code>/v1/chat</code>.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step decision">
+          <div class="num">2</div>
+          <h4>Rate limit check (Redis)</h4>
+          <p>Has this user sent too many requests in the last minute? If <strong>yes</strong> → block. If <strong>no</strong> → continue.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step">
+          <div class="num">3</div>
+          <h4>Pre-process the input</h4>
+          <p>If the prompt has attachments (PDF, URL), extract their text using PyPDF / a web fetcher. The text now contains both the user’s words and the document text.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step decision">
+          <div class="num">4</div>
+          <h4>Layer 1 — XGBoost classifier scores it</h4>
+          <p>Returns a number 0.0 → 1.0. Above 0.9 → clearly malicious, block. Below 0.2 → clearly safe, pass. In between → forward to Layer 2.</p>
+        </div>
+
+        <div class="branch-row">
+          <div class="branch">
+            <div class="branch-label no">if score &gt; 0.9</div>
+            <div class="flow-arrow"></div>
+            <div class="flow-step block">
+              <div class="num">✕</div>
+              <h4>BLOCKED</h4>
+              <p>Return “Request blocked by AI Firewall (L1)”. Log the attempt.</p>
+            </div>
+          </div>
+          <div class="branch">
+            <div class="branch-label yes">if uncertain</div>
+            <div class="flow-arrow"></div>
+            <div class="flow-step decision">
+              <div class="num">5</div>
+              <h4>Layer 2 — LLM-as-judge</h4>
+              <p>A second AI reads the prompt and answers: “Is this trying to manipulate the assistant?” If yes → block. If no → continue.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step decision">
+          <div class="num">6</div>
+          <h4>Layer 3 — Indirect injection scan</h4>
+          <p>If the prompt has document text attached, scan it for hidden text, white-on-white text, suspicious instructions like “ignore previous”. Block if found.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step">
+          <div class="num">7</div>
+          <h4>Layer 4 — Inject canary tokens</h4>
+          <p>Add 1–2 fake “secret” strings into the system prompt the AI sees. We will check later if any of these leak into the reply.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step">
+          <div class="num">8</div>
+          <h4>Forward to backend LLM</h4>
+          <p>The cleaned prompt is sent to OpenAI / Anthropic / self-hosted Llama. Whichever the user requested.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step decision">
+          <div class="num">9</div>
+          <h4>Output check — canary leak?</h4>
+          <p>Does the AI’s reply contain any of the canary tokens we planted in step 7? If yes → the AI was tricked. Block the response.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step">
+          <div class="num">10</div>
+          <h4>Output filter</h4>
+          <p>Strip leftover PII (emails, phone numbers, internal URLs) just to be safe.</p>
+        </div>
+
+        <div class="flow-arrow"></div>
+
+        <div class="flow-step">
+          <div class="num">11</div>
+          <h4>Send safe reply back to user</h4>
+          <p>Plus emit telemetry: which layers ran, scores, time spent, verdict. Stored via OpenTelemetry for the OWASP report.</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <!-- DIAGRAM 3: LAYERED DEFENCE                  -->
+  <!-- ============================================ -->
+  <section>
+    <h2>3 · Why “layers” — the Swiss-cheese model</h2>
+    <p class="sub">No single detector is perfect. Each layer has gaps. But when stacked, the gaps don’t line up — so an attack must beat <em>every</em> layer to succeed. This is the heart of the project.</p>
+
+    <div class="diagram">
+      <div class="cheese-wrap">
+
+        <div class="cheese-layer">
+          <div class="badge">L1</div>
+          <div class="body">
+            <h4>XGBoost classifier (fast)</h4>
+            <p>Pattern-matches known attack shapes. Cheap. Runs on every request in under 10 ms.</p>
+          </div>
+          <div class="catches">Catches: known jailbreaks, repeat patterns</div>
+        </div>
+
+        <div class="cheese-layer">
+          <div class="badge">L2</div>
+          <div class="body">
+            <h4>LLM-as-judge (smart)</h4>
+            <p>A second AI reads borderline prompts and gives a verdict. Slower, but understands meaning.</p>
+          </div>
+          <div class="catches">Catches: paraphrased attacks, novel jailbreaks</div>
+        </div>
+
+        <div class="cheese-layer">
+          <div class="badge">L3</div>
+          <div class="body">
+            <h4>Indirect injection scanner</h4>
+            <p>Looks inside uploaded PDFs, web pages, and RAG chunks before the AI ever sees them.</p>
+          </div>
+          <div class="catches">Catches: poisoned documents, hidden text</div>
+        </div>
+
+        <div class="cheese-layer">
+          <div class="badge">L4</div>
+          <div class="body">
+            <h4>Canary-token tripwire</h4>
+            <p>Plants fake secrets and watches the output. If they appear in the reply, exfiltration was attempted.</p>
+          </div>
+          <div class="catches">Catches: data theft, system-prompt leak</div>
+        </div>
+
+        <div class="cheese-layer">
+          <div class="badge">L5</div>
+          <div class="body">
+            <h4>Rate limiting</h4>
+            <p>Stops one user / one IP from hammering the system to brute-force jailbreaks.</p>
+          </div>
+          <div class="catches">Catches: brute-force probing, abuse</div>
+        </div>
+
+        <div class="cheese-layer">
+          <div class="badge">L6</div>
+          <div class="body">
+            <h4>OWASP LLM Top-10 test harness</h4>
+            <p>Not a runtime layer — a CI test that runs every known attack on every code change. Stops regressions.</p>
+          </div>
+          <div class="catches">Catches: regressions, broken defences</div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ -->
+  <!-- KEY DECISIONS / NOTES                       -->
+  <!-- ============================================ -->
+  <section>
+    <h2>4 · Key design decisions (in plain English)</h2>
+    <p class="sub">These are the “why” behind the diagrams above.</p>
+
+    <div class="diagram">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px;">
+
+        <div class="node">
+          <div class="title">Why fast L1 before slow L2?</div>
+          <div class="desc">XGBoost is &lt; 10 ms. LLM-judge is 500–2000 ms. Most prompts are obviously fine — we only “pay” for the slow check on the 5% that look uncertain. Saves money and latency.</div>
+        </div>
+
+        <div class="node">
+          <div class="title">Why scan documents (L3)?</div>
+          <div class="desc">In RAG apps, the most dangerous attacks come <em>not</em> from the user but from documents the AI loads. The bank PDF story is exactly this. L1 + L2 only see the user’s text — so we need a separate layer for document content.</div>
+        </div>
+
+        <div class="node">
+          <div class="title">Why canary tokens (L4)?</div>
+          <div class="desc">No detector can read the AI’s mind. Canary tokens flip the problem: instead of guessing intent, we leave bait. If the AI ever speaks the bait, we know something went wrong — even if we don’t know what.</div>
+        </div>
+
+        <div class="node">
+          <div class="title">Why three different LLM backends?</div>
+          <div class="desc">Real production systems are multi-vendor for cost + reliability + privacy. Showing the firewall handles all three (OpenAI, Anthropic, self-hosted Llama) makes the project realistic.</div>
+        </div>
+
+        <div class="node">
+          <div class="title">Why Redis instead of Postgres for rate limits?</div>
+          <div class="desc">Rate limiting needs millisecond reads <em>per request</em>. Postgres is too slow for that. Redis is in-memory and gives sub-millisecond reads. We use Postgres only for the slow audit log.</div>
+        </div>
+
+        <div class="node">
+          <div class="title">Why a CI test harness (L6)?</div>
+          <div class="desc">The defences mean nothing if they silently break in a code change. The OWASP test harness re-runs every known attack on every commit — like unit tests, but for security. This is what makes the system <em>production-grade</em>.</div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Prepared for Suliman Khan · Advanced DevSecOps Portfolio · Project 04 · Architecture &amp; Flow
+</footer>
+
+</body>
+</html>
