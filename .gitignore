@@ -44,11 +44,12 @@ models/*.safetensors
 models/*.pt
 models/*.pkl
 models/*.joblib
-datasets/*.csv
-datasets/*.json
+# Auto-generated training data (regenerate via scripts/download_datasets.py)
+datasets/prompt_injection_train.csv
 datasets/*.parquet
 datasets/raw/
 datasets/processed/
+# NOTE: datasets/manual_augmentation.csv IS tracked — hand-crafted code-as-data
 
 # ============================================
 # IDE / editor
