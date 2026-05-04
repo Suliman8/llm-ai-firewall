@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from src.backends.anthropic_backend import AnthropicBackend
 from src.backends.base import Backend
 from src.backends.mock_backend import MockBackend
+from src.backends.ollama_backend import OllamaBackend
 from src.backends.openai_backend import OpenAIBackend
 from src.gateway.schemas import BackendName
 
@@ -17,6 +18,7 @@ class BackendRouter:
             "mock": MockBackend(),
             "openai": OpenAIBackend(),
             "anthropic": AnthropicBackend(),
+            "ollama": OllamaBackend(),
         }
 
     def get(self, name: BackendName) -> Backend:

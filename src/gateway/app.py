@@ -26,6 +26,7 @@ from src.detectors.l2_llm_judge import L2LLMJudge
 from src.gateway.config import settings
 from src.firewall.canary import generate_canary
 from src.firewall.output_filter import has_hard_block, redact, scan_output
+from src.firewall.rate_limit import RateLimiter, build_rate_limiter
 from src.gateway.schemas import (
     ChatRequest,
     ChatResponse,
@@ -83,6 +84,14 @@ async def lifespan(app: FastAPI):
     except RuntimeError as e:
         logger.warning("L2 disabled: %s", e)
 
+    # ── Rate limiter (Redis preferred, in-memory fallback) ──
+    refill_per_sec = settings.rate_limit_per_minute / 60.0
+    app.state.rate_limiter = await build_rate_limiter(
+        redis_url=settings.redis_url,
+        capacity=settings.rate_limit_per_minute,
+        refill_per_sec=refill_per_sec,
+    )
+
     logger.info("All firewall layers initialized.")
     yield
     logger.info("Shutting down.")
@@ -96,9 +105,32 @@ app = FastAPI(
 )
 
 
-def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+def require_api_key(x_api_key: str | None = Header(default=None)) -> str:
     if x_api_key != settings.gateway_api_key:
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key header.")
+    return x_api_key
+
+
+async def enforce_rate_limit(
+    request: Request,
+    x_api_key: str = Depends(require_api_key),
+) -> None:
+    limiter: RateLimiter | None = getattr(request.app.state, "rate_limiter", None)
+    if limiter is None:
+        return  # not initialised yet (e.g. during early test boot)
+    verdict = await limiter.check(x_api_key)
+    if not verdict.allowed:
+        retry = max(1, int(verdict.retry_after_sec) + 1)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "Rate limit exceeded.",
+                "capacity": verdict.capacity,
+                "refill_per_sec": verdict.refill_per_sec,
+                "retry_after_sec": retry,
+            },
+            headers={"Retry-After": str(retry)},
+        )
 
 
 @app.middleware("http")
@@ -152,7 +184,7 @@ async def health() -> HealthResponse:
     "/v1/chat",
     response_model=ChatResponse,
     tags=["chat"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(enforce_rate_limit)],
 )
 async def chat(request: ChatRequest) -> ChatResponse:
     prompt = request.prompt
@@ -300,7 +332,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
     "/v1/scan",
     response_model=ScanResponse,
     tags=["scan"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(enforce_rate_limit)],
 )
 async def scan(request: ScanRequest) -> ScanResponse:
     """Screen external content (raw text / URL / PDF) for prompt injection

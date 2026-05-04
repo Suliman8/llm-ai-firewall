@@ -3,7 +3,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-BackendName = Literal["mock", "openai", "anthropic"]
+BackendName = Literal["mock", "openai", "anthropic", "ollama"]
 Verdict = Literal["pass", "uncertain", "block"]
 ScanSource = Literal["text", "url", "pdf"]
 

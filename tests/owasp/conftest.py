@@ -25,9 +25,13 @@ API_KEY = "dev-secret-key"
 
 @pytest_asyncio.fixture(scope="session")
 async def client() -> httpx.AsyncClient:
-    """In-process async client with the firewall fully booted."""
+    """In-process async client with the firewall fully booted.
+
+    `startup_timeout=60` is needed because L1a + L1b model loading +
+    HuggingFace Hub re-validation can exceed asgi-lifespan's default 5s.
+    """
     os.environ.setdefault("GATEWAY_API_KEY", API_KEY)
-    async with LifespanManager(app):
+    async with LifespanManager(app, startup_timeout=60.0, shutdown_timeout=10.0):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",

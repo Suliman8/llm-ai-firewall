@@ -1,13 +1,13 @@
 # OWASP LLM Top-10 — Coverage Report
 
-Total tests: **48** · passed: **48** · failed: **0** · duration: **22.4s**
+Total tests: **53** · passed: **53** · failed: **0** · duration: **23.0s**
 
 | Category | Title | Pass | Fail | Skip |
 |----------|-------|------|------|------|
 | LLM01 | Prompt Injection (direct) | 10 | 0 | 0 |
 | LLM02 | Insecure Output Handling | 5 | 0 | 0 |
 | LLM03 | Indirect Injection (RAG / docs) | 4 | 0 | 0 |
-| LLM04 | Model DoS / oversize input | 4 | 0 | 0 |
+| LLM04 | Model DoS / oversize input | 9 | 0 | 0 |
 | LLM06 | Sensitive Information Disclosure | 10 | 0 | 0 |
 | FP-1 | Borderline-safe (look like attacks, are not) | 10 | 0 | 0 |
 | FP-2 | Plain-safe prompts pass | 5 | 0 | 0 |
@@ -44,6 +44,11 @@ Total tests: **48** · passed: **48** · failed: **0** · duration: **22.4s**
 - ✅ `test_llm04_empty_prompt_rejected`
 - ✅ `test_llm04_scan_oversize_pdf_rejected`
 - ✅ `test_llm04_scan_private_url_rejected`
+- ✅ `test_rate_limit_first_request_allowed_with_full_bucket`
+- ✅ `test_rate_limit_capacity_hit_returns_429_signal`
+- ✅ `test_rate_limit_per_key_isolation`
+- ✅ `test_rate_limit_refills_over_time`
+- ✅ `test_rate_limit_retry_after_is_positive_when_denied`
 
 ### LLM06 · Sensitive Information Disclosure
 - ✅ `test_llm06_output_filter_detects[openai_key-Your key is sk-test1234567890abcdefghij1234567890XYZ now-openai_key-]`
