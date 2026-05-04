@@ -95,3 +95,7 @@ Screenshot_*.png
 
 # Claude Code working directory
 .claude/
+
+# pytest / coverage artifacts
+.pytest_owasp.json
+.pytest_cache/

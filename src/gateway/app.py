@@ -194,25 +194,24 @@ async def chat(request: ChatRequest) -> ChatResponse:
         logger.info("L1b score=%.4f verdict=%s", l1b_score, l1b_v)
         fw_l1b = L1bResult(score=round(l1b_score, 4), verdict=l1b_v)
 
-        if l1b_v == "block":
-            firewall = FirewallVerdict(overall="block", blocked_by="L1b", l1a=fw_l1a, l1b=fw_l1b)
-            raise HTTPException(status_code=403, detail={
-                "message": "Request blocked by AI Firewall.",
-                "blocked_by": "L1b",
-                "firewall": firewall.model_dump(),
-            })
-
-        # ── L2 LLM-judge — fires in TWO cases ──
-        #   1. L1b is also uncertain (genuine ambiguity)
-        #   2. STRONG DISAGREEMENT: L1a >= disagreement_threshold but L1b says "pass"
-        #      → ask L2 to break the tie (this catches false-PASS on prompts
-        #      that look like attack questions without containing an attack).
+        # ── L2 LLM-judge — fires whenever the verdict is non-trivial ──
+        #   1. L1b uncertain                              → ambiguity
+        #   2. L1b PASS but L1a high (>= disagreement)    → "L1b is too lenient" disagreement
+        #   3. L1b BLOCK                                  → give L2 the chance to override a false-positive
+        # Skip L2 only when L1a + L1b confidently agree it's safe (L1b pass + L1a low),
+        # in which case we trust the agreement.
         l1b_uncertain = l1b_v == "uncertain"
         strong_disagreement = (
             l1b_v == "pass" and l1a_score >= settings.l1_disagreement_threshold
         )
-        if (l1b_uncertain or strong_disagreement) and l2_llm_judge.is_loaded():
-            trigger = "uncertain" if l1b_uncertain else "disagreement"
+        l1b_block = l1b_v == "block"
+
+        if (l1b_uncertain or strong_disagreement or l1b_block) and l2_llm_judge.is_loaded():
+            trigger = (
+                "uncertain" if l1b_uncertain
+                else "disagreement" if strong_disagreement
+                else "l1b_block_review"
+            )
             l2 = l2_llm_judge.get_instance()
             l2_v, l2_conf, l2_reason = await l2.evaluate(prompt)
             logger.info(
@@ -231,6 +230,15 @@ async def chat(request: ChatRequest) -> ChatResponse:
                     "blocked_by": "L2",
                     "firewall": firewall.model_dump(),
                 })
+            # L2 says PASS — overrides any L1b block
+        elif l1b_block:
+            # L1b says block AND L2 unavailable → trust L1b's block as the final word
+            firewall = FirewallVerdict(overall="block", blocked_by="L1b", l1a=fw_l1a, l1b=fw_l1b)
+            raise HTTPException(status_code=403, detail={
+                "message": "Request blocked by AI Firewall.",
+                "blocked_by": "L1b",
+                "firewall": firewall.model_dump(),
+            })
 
     # ── All input layers passed — build canary + forward to backend ──
     canary = generate_canary()
