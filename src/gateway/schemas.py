@@ -7,6 +7,8 @@ BackendName = Literal["mock", "openai", "anthropic"]
 Verdict = Literal["pass", "uncertain", "block"]
 
 
+# ───────── Request ─────────
+
 class ChatRequest(BaseModel):
     backend: BackendName = Field(default="mock", description="Which LLM backend to use.")
     prompt: str = Field(..., min_length=1, max_length=20000, description="User prompt.")
@@ -15,10 +17,33 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
 
 
-class FirewallVerdict(BaseModel):
-    l1_score: float
+# ───────── Per-layer firewall results ─────────
+
+class L1aResult(BaseModel):
+    score: float
     verdict: Verdict
 
+
+class L1bResult(BaseModel):
+    score: float
+    verdict: Verdict
+
+
+class L2Result(BaseModel):
+    verdict: Literal["pass", "block"]
+    confidence: float
+    reason: str
+
+
+class FirewallVerdict(BaseModel):
+    overall: Literal["pass", "block"]
+    blocked_by: Literal["L1a", "L1b", "L2"] | None = None
+    l1a: L1aResult
+    l1b: L1bResult | None = None
+    l2: L2Result | None = None
+
+
+# ───────── Response ─────────
 
 class ChatResponse(BaseModel):
     backend: BackendName
@@ -28,14 +53,31 @@ class ChatResponse(BaseModel):
     firewall: FirewallVerdict | None = None
 
 
-class L1Status(BaseModel):
+# ───────── Health ─────────
+
+class L1aStatus(BaseModel):
     loaded: bool
     f1: float | None = None
     block_threshold: float | None = None
     pass_threshold: float | None = None
 
 
+class L1bStatus(BaseModel):
+    loaded: bool
+
+
+class L2Status(BaseModel):
+    loaded: bool
+    model: str | None = None
+
+
+class FirewallStatus(BaseModel):
+    l1a: L1aStatus
+    l1b: L1bStatus
+    l2: L2Status
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     backends_available: list[BackendName]
-    l1: L1Status
+    firewall: FirewallStatus

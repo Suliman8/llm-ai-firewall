@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     llama_base_url: str = "http://localhost:11434"
 
+    # --- Groq (free LLM provider — used by L2 LLM-judge in W3) ---
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "llama-3.1-8b-instant"
+
     # --- Gateway settings ---
     gateway_host: str = "0.0.0.0"
     gateway_port: int = 8000
@@ -28,8 +33,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # --- Detection thresholds (used in W2+) ---
-    l1_block_threshold: float = 0.7   # tuned for our trained model (catches DAN, AIM)
+    l1_block_threshold: float = 0.95  # only block at L1a if very confident
     l1_pass_threshold: float = 0.2
+    # If L1a >= this AND L1b says "pass", that's a disagreement → escalate to L2
+    l1_disagreement_threshold: float = 0.7
 
     # --- Rate limit (W7) ---
     rate_limit_per_minute: int = 60

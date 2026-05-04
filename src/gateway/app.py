@@ -1,12 +1,14 @@
-"""FastAPI application — the AI Firewall gateway entry point.
+"""FastAPI application — the AI Firewall gateway.
 
 Run with:
     uvicorn src.gateway.app:app --reload --host 0.0.0.0 --port 8000
 
-Endpoints:
-    GET  /health      -> liveness + which backends + L1 status
-    GET  /docs        -> auto-generated Swagger UI
-    POST /v1/chat     -> proxy a prompt through L1 → backend (X-API-Key required)
+Layers chained on every /v1/chat call (in order, only when needed):
+    L1a XGBoost      ~10 ms   — runs always
+        └── if uncertain  ─┐
+    L1b ProtectAI    ~50 ms   — runs only when L1a is uncertain
+        └── if uncertain  ─┐
+    L2 LLM-judge     ~500 ms  — runs only when L1b is also uncertain
 """
 import asyncio
 import logging
@@ -17,15 +19,23 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
 from src.backends.router import router as backend_router
-from src.detectors import l1_classifier
+from src.detectors import l1_classifier, l1b_protectai, l2_llm_judge
 from src.detectors.l1_classifier import L1Classifier
+from src.detectors.l1b_protectai import L1bProtectAI
+from src.detectors.l2_llm_judge import L2LLMJudge
 from src.gateway.config import settings
 from src.gateway.schemas import (
     ChatRequest,
     ChatResponse,
+    FirewallStatus,
     FirewallVerdict,
     HealthResponse,
-    L1Status,
+    L1aResult,
+    L1aStatus,
+    L1bResult,
+    L1bStatus,
+    L2Result,
+    L2Status,
 )
 
 logging.basicConfig(
@@ -37,14 +47,27 @@ logger = logging.getLogger("gateway")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the L1 classifier once at startup, free at shutdown."""
-    logger.info("Loading L1 classifier ...")
-    clf = L1Classifier(
-        block_threshold=settings.l1_block_threshold,
-        pass_threshold=settings.l1_pass_threshold,
+    # ── L1a XGBoost (always required) ──
+    logger.info("Loading L1a XGBoost ...")
+    l1_classifier.set_instance(
+        L1Classifier(
+            block_threshold=settings.l1_block_threshold,
+            pass_threshold=settings.l1_pass_threshold,
+        )
     )
-    l1_classifier.set_instance(clf)
-    logger.info("L1 ready.")
+
+    # ── L1b ProtectAI (always required) ──
+    logger.info("Loading L1b ProtectAI ...")
+    l1b_protectai.set_instance(L1bProtectAI())
+
+    # ── L2 LLM-judge (optional — degrades gracefully if Groq key missing) ──
+    try:
+        l2_llm_judge.set_instance(L2LLMJudge(model=settings.groq_model))
+        logger.info("L2 LLM-judge ready.")
+    except RuntimeError as e:
+        logger.warning("L2 disabled: %s", e)
+
+    logger.info("All firewall layers initialized.")
     yield
     logger.info("Shutting down.")
 
@@ -52,7 +75,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI Firewall Gateway",
     description="LLM Application Security Gateway — Project 4 of Suliman's DevSecOps Portfolio.",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -76,24 +99,38 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+# ───────── /health ─────────
+
 @app.get("/health", response_model=HealthResponse, tags=["meta"])
 async def health() -> HealthResponse:
+    # L1a
     try:
-        clf = l1_classifier.get_instance()
-        l1_status = L1Status(
+        l1a = l1_classifier.get_instance()
+        l1a_status = L1aStatus(
             loaded=True,
-            f1=clf.metrics.get("f1"),
-            block_threshold=clf.block_threshold,
-            pass_threshold=clf.pass_threshold,
+            f1=l1a.metrics.get("f1"),
+            block_threshold=l1a.block_threshold,
+            pass_threshold=l1a.pass_threshold,
         )
     except RuntimeError:
-        l1_status = L1Status(loaded=False)
+        l1a_status = L1aStatus(loaded=False)
+
+    # L1b
+    l1b_status = L1bStatus(loaded=l1b_protectai.is_loaded())
+
+    # L2
+    l2_status = L2Status(
+        loaded=l2_llm_judge.is_loaded(),
+        model=settings.groq_model if l2_llm_judge.is_loaded() else None,
+    )
 
     return HealthResponse(
         backends_available=backend_router.available(),
-        l1=l1_status,
+        firewall=FirewallStatus(l1a=l1a_status, l1b=l1b_status, l2=l2_status),
     )
 
+
+# ───────── /v1/chat — chained firewall ─────────
 
 @app.post(
     "/v1/chat",
@@ -102,27 +139,71 @@ async def health() -> HealthResponse:
     dependencies=[Depends(require_api_key)],
 )
 async def chat(request: ChatRequest) -> ChatResponse:
-    # ───────── Layer 1 — XGBoost classifier ─────────
-    clf = l1_classifier.get_instance()
-    # Run sync ML in a thread so we don't block the event loop
-    score, verdict = await asyncio.to_thread(clf.evaluate, request.prompt)
-    logger.info(
-        "L1 score=%.4f verdict=%s prompt_len=%d backend=%s",
-        score, verdict, len(request.prompt), request.backend,
-    )
+    prompt = request.prompt
 
-    if verdict == "block":
-        raise HTTPException(
-            status_code=403,
-            detail={
-                "message": "Request blocked by AI Firewall (Layer 1).",
-                "layer": "L1",
-                "score": round(score, 4),
-                "threshold": clf.block_threshold,
-            },
+    # ── L1a XGBoost (always runs) ──
+    l1a = l1_classifier.get_instance()
+    l1a_score, l1a_v = await asyncio.to_thread(l1a.evaluate, prompt)
+    logger.info("L1a score=%.4f verdict=%s", l1a_score, l1a_v)
+
+    fw_l1a = L1aResult(score=round(l1a_score, 4), verdict=l1a_v)
+    fw_l1b: L1bResult | None = None
+    fw_l2: L2Result | None = None
+
+    if l1a_v == "block":
+        firewall = FirewallVerdict(overall="block", blocked_by="L1a", l1a=fw_l1a)
+        raise HTTPException(status_code=403, detail={
+            "message": "Request blocked by AI Firewall.",
+            "blocked_by": "L1a",
+            "firewall": firewall.model_dump(),
+        })
+
+    # ── L1b ProtectAI (only when L1a is uncertain) ──
+    if l1a_v == "uncertain":
+        l1b = l1b_protectai.get_instance()
+        l1b_score, l1b_v = await asyncio.to_thread(l1b.evaluate, prompt)
+        logger.info("L1b score=%.4f verdict=%s", l1b_score, l1b_v)
+        fw_l1b = L1bResult(score=round(l1b_score, 4), verdict=l1b_v)
+
+        if l1b_v == "block":
+            firewall = FirewallVerdict(overall="block", blocked_by="L1b", l1a=fw_l1a, l1b=fw_l1b)
+            raise HTTPException(status_code=403, detail={
+                "message": "Request blocked by AI Firewall.",
+                "blocked_by": "L1b",
+                "firewall": firewall.model_dump(),
+            })
+
+        # ── L2 LLM-judge — fires in TWO cases ──
+        #   1. L1b is also uncertain (genuine ambiguity)
+        #   2. STRONG DISAGREEMENT: L1a >= disagreement_threshold but L1b says "pass"
+        #      → ask L2 to break the tie (this catches false-PASS on prompts
+        #      that look like attack questions without containing an attack).
+        l1b_uncertain = l1b_v == "uncertain"
+        strong_disagreement = (
+            l1b_v == "pass" and l1a_score >= settings.l1_disagreement_threshold
         )
+        if (l1b_uncertain or strong_disagreement) and l2_llm_judge.is_loaded():
+            trigger = "uncertain" if l1b_uncertain else "disagreement"
+            l2 = l2_llm_judge.get_instance()
+            l2_v, l2_conf, l2_reason = await l2.evaluate(prompt)
+            logger.info(
+                "L2 trigger=%s verdict=%s confidence=%.2f reason=%s",
+                trigger, l2_v, l2_conf, l2_reason,
+            )
+            fw_l2 = L2Result(verdict=l2_v, confidence=l2_conf, reason=l2_reason)
 
-    # ───────── Forward to backend ─────────
+            if l2_v == "block":
+                firewall = FirewallVerdict(
+                    overall="block", blocked_by="L2",
+                    l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2,
+                )
+                raise HTTPException(status_code=403, detail={
+                    "message": "Request blocked by AI Firewall.",
+                    "blocked_by": "L2",
+                    "firewall": firewall.model_dump(),
+                })
+
+    # ── All layers passed — forward to backend ──
     backend = backend_router.get(request.backend)
     try:
         response = await backend.chat(request)
@@ -132,5 +213,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         logger.exception("backend_error backend=%s", backend.name)
         raise HTTPException(status_code=502, detail=f"Backend error: {e}") from e
 
-    response.firewall = FirewallVerdict(l1_score=round(score, 4), verdict=verdict)
+    response.firewall = FirewallVerdict(
+        overall="pass", blocked_by=None,
+        l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2,
+    )
     return response
