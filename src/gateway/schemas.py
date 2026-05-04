@@ -1,10 +1,11 @@
 """Pydantic request/response models for the gateway."""
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 BackendName = Literal["mock", "openai", "anthropic"]
 Verdict = Literal["pass", "uncertain", "block"]
+ScanSource = Literal["text", "url", "pdf"]
 
 
 # ───────── Request ─────────
@@ -81,3 +82,51 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
     backends_available: list[BackendName]
     firewall: FirewallStatus
+
+
+# ───────── /v1/scan — indirect injection scanner (W4) ─────────
+
+class ScanRequest(BaseModel):
+    source: ScanSource = Field(..., description="Where the content came from.")
+    text: str | None = Field(default=None, description="Used when source='text'.")
+    url: str | None = Field(default=None, description="Used when source='url'.")
+    pdf_b64: str | None = Field(default=None, description="Base64-encoded PDF, used when source='pdf'.")
+
+    @model_validator(mode="after")
+    def _exactly_one_payload(self) -> "ScanRequest":
+        provided = [
+            (self.source == "text", self.text),
+            (self.source == "url", self.url),
+            (self.source == "pdf", self.pdf_b64),
+        ]
+        for matches, value in provided:
+            if matches and not value:
+                raise ValueError(f"source='{self.source}' requires the matching field to be set")
+        return self
+
+
+class ScanChunkResult(BaseModel):
+    index: int
+    start: int
+    end: int
+    preview: str
+    l1a: dict[str, Any]
+    l1b: dict[str, Any] | None = None
+    l2: dict[str, Any] | None = None
+    verdict: Verdict
+    blocked_by: Literal["L1a", "L1b", "L2"] | None = None
+
+
+class ScanSummary(BaseModel):
+    total_chunks: int
+    blocked_chunks: int
+    overall: Literal["pass", "block"]
+    blocked_by: Literal["L1a", "L1b", "L2"] | None = None
+
+
+class ScanResponse(BaseModel):
+    source: ScanSource
+    provenance: str
+    char_count: int
+    summary: ScanSummary
+    chunks: list[ScanChunkResult]

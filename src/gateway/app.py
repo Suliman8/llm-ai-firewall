@@ -36,7 +36,19 @@ from src.gateway.schemas import (
     L1bStatus,
     L2Result,
     L2Status,
+    ScanChunkResult,
+    ScanRequest,
+    ScanResponse,
+    ScanSummary,
 )
+from src.scanner.chunker import chunk_text
+from src.scanner.extractor import (
+    ExtractionError,
+    extract_pdf_b64,
+    extract_text,
+    extract_url,
+)
+from src.scanner.scan_engine import scan_chunks
 
 logging.basicConfig(
     level=settings.log_level,
@@ -218,3 +230,49 @@ async def chat(request: ChatRequest) -> ChatResponse:
         l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2,
     )
     return response
+
+
+# ───────── /v1/scan — indirect-injection scanner (W4) ─────────
+
+@app.post(
+    "/v1/scan",
+    response_model=ScanResponse,
+    tags=["scan"],
+    dependencies=[Depends(require_api_key)],
+)
+async def scan(request: ScanRequest) -> ScanResponse:
+    """Screen external content (raw text / URL / PDF) for prompt injection
+    BEFORE it gets fed into an LLM context.
+
+    Pipeline: extract → chunk → L1a/L1b/L2 per chunk → aggregate.
+    """
+    try:
+        if request.source == "text":
+            content, provenance = extract_text(request.text or "")
+        elif request.source == "url":
+            content, provenance = await extract_url(request.url or "")
+        elif request.source == "pdf":
+            content, provenance = extract_pdf_b64(request.pdf_b64 or "")
+        else:  # pragma: no cover — pydantic enforces
+            raise HTTPException(status_code=400, detail=f"Unknown source: {request.source}")
+    except ExtractionError as e:
+        raise HTTPException(status_code=422, detail=f"Extraction failed: {e}") from e
+
+    if not content:
+        raise HTTPException(status_code=422, detail="No extractable text in source.")
+
+    pieces = chunk_text(content)
+    records, summary = await scan_chunks(pieces)
+    logger.info(
+        "scan source=%s provenance=%s chunks=%d blocked=%d overall=%s",
+        request.source, provenance, summary["total_chunks"],
+        summary["blocked_chunks"], summary["overall"],
+    )
+
+    return ScanResponse(
+        source=request.source,
+        provenance=provenance,
+        char_count=len(content),
+        summary=ScanSummary(**summary),
+        chunks=[ScanChunkResult(**r) for r in records],
+    )
