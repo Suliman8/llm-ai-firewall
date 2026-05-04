@@ -13,9 +13,18 @@ ScanSource = Literal["text", "url", "pdf"]
 class ChatRequest(BaseModel):
     backend: BackendName = Field(default="mock", description="Which LLM backend to use.")
     prompt: str = Field(..., min_length=1, max_length=20000, description="User prompt.")
+    system: str | None = Field(default=None, max_length=8000, description="Optional system prompt.")
     model: str | None = Field(default=None, description="Optional model override.")
     max_tokens: int = Field(default=512, ge=1, le=4096)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    bypass_input_firewall: bool = Field(
+        default=False,
+        description=(
+            "DEMO ONLY: skip L1a/L1b/L2 input scanning. Honoured only when "
+            "backend='mock' so it can never weaken production. Used to test "
+            "output-side defences (canary, regex filter) in isolation."
+        ),
+    )
 
 
 # ───────── Per-layer firewall results ─────────
@@ -36,12 +45,25 @@ class L2Result(BaseModel):
     reason: str
 
 
+class OutputFinding(BaseModel):
+    type: str
+    match_preview: str
+    span: tuple[int, int]
+
+
+class OutputFilterResult(BaseModel):
+    blocked: bool
+    canary_tripped: bool
+    findings: list[OutputFinding] = []
+
+
 class FirewallVerdict(BaseModel):
     overall: Literal["pass", "block"]
-    blocked_by: Literal["L1a", "L1b", "L2"] | None = None
+    blocked_by: Literal["L1a", "L1b", "L2", "output"] | None = None
     l1a: L1aResult
     l1b: L1bResult | None = None
     l2: L2Result | None = None
+    output: OutputFilterResult | None = None
 
 
 # ───────── Response ─────────

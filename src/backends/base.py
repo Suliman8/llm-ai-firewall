@@ -12,8 +12,12 @@ class Backend(ABC):
     name: str
 
     @abstractmethod
-    async def chat(self, request: ChatRequest) -> ChatResponse:
-        """Forward the prompt to the underlying LLM and return a response."""
+    async def chat(self, request: ChatRequest, system_prompt: str = "") -> ChatResponse:
+        """Forward the prompt to the underlying LLM and return a response.
+
+        system_prompt: gateway-built system prompt (with canary already injected).
+        Empty string means "no system message".
+        """
 
     @abstractmethod
     def is_available(self) -> bool:

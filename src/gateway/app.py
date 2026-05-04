@@ -24,6 +24,8 @@ from src.detectors.l1_classifier import L1Classifier
 from src.detectors.l1b_protectai import L1bProtectAI
 from src.detectors.l2_llm_judge import L2LLMJudge
 from src.gateway.config import settings
+from src.firewall.canary import generate_canary
+from src.firewall.output_filter import has_hard_block, redact, scan_output
 from src.gateway.schemas import (
     ChatRequest,
     ChatResponse,
@@ -36,6 +38,8 @@ from src.gateway.schemas import (
     L1bStatus,
     L2Result,
     L2Status,
+    OutputFilterResult,
+    OutputFinding,
     ScanChunkResult,
     ScanRequest,
     ScanResponse,
@@ -153,14 +157,27 @@ async def health() -> HealthResponse:
 async def chat(request: ChatRequest) -> ChatResponse:
     prompt = request.prompt
 
-    # ── L1a XGBoost (always runs) ──
-    l1a = l1_classifier.get_instance()
-    l1a_score, l1a_v = await asyncio.to_thread(l1a.evaluate, prompt)
-    logger.info("L1a score=%.4f verdict=%s", l1a_score, l1a_v)
+    # ── DEMO bypass — only allowed on mock backend ──
+    bypass_input = request.bypass_input_firewall and request.backend == "mock"
+    if request.bypass_input_firewall and request.backend != "mock":
+        logger.warning("bypass_input_firewall ignored: backend=%s (only mock allows it)", request.backend)
 
-    fw_l1a = L1aResult(score=round(l1a_score, 4), verdict=l1a_v)
-    fw_l1b: L1bResult | None = None
-    fw_l2: L2Result | None = None
+    if bypass_input:
+        logger.warning("INPUT FIREWALL BYPASSED for demo (backend=mock)")
+        fw_l1a = L1aResult(score=0.0, verdict="pass")
+        fw_l1b: L1bResult | None = None
+        fw_l2: L2Result | None = None
+        l1a_score = 0.0
+        l1a_v = "pass"
+    else:
+        # ── L1a XGBoost (always runs) ──
+        l1a = l1_classifier.get_instance()
+        l1a_score, l1a_v = await asyncio.to_thread(l1a.evaluate, prompt)
+        logger.info("L1a score=%.4f verdict=%s", l1a_score, l1a_v)
+
+        fw_l1a = L1aResult(score=round(l1a_score, 4), verdict=l1a_v)
+        fw_l1b: L1bResult | None = None
+        fw_l2: L2Result | None = None
 
     if l1a_v == "block":
         firewall = FirewallVerdict(overall="block", blocked_by="L1a", l1a=fw_l1a)
@@ -215,19 +232,56 @@ async def chat(request: ChatRequest) -> ChatResponse:
                     "firewall": firewall.model_dump(),
                 })
 
-    # ── All layers passed — forward to backend ──
+    # ── All input layers passed — build canary + forward to backend ──
+    canary = generate_canary()
+    effective_system = canary.inject(request.system or "")
+
     backend = backend_router.get(request.backend)
     try:
-        response = await backend.chat(request)
+        response = await backend.chat(request, system_prompt=effective_system)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("backend_error backend=%s", backend.name)
         raise HTTPException(status_code=502, detail=f"Backend error: {e}") from e
 
+    # ── Output-side firewall ──
+    raw_findings = scan_output(response.reply)
+    canary_tripped = canary.appears_in(response.reply)
+    output_blocked = canary_tripped or has_hard_block(raw_findings)
+
+    findings_models = [
+        OutputFinding(type=f.type, match_preview=f.match_preview, span=f.span)
+        for f in raw_findings
+    ]
+    output_result = OutputFilterResult(
+        blocked=output_blocked,
+        canary_tripped=canary_tripped,
+        findings=findings_models,
+    )
+
+    if output_blocked:
+        logger.warning(
+            "output_blocked canary_tripped=%s findings=%s",
+            canary_tripped, [f.type for f in raw_findings],
+        )
+        firewall = FirewallVerdict(
+            overall="block", blocked_by="output",
+            l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2, output=output_result,
+        )
+        raise HTTPException(status_code=403, detail={
+            "message": "Response blocked by AI Firewall (output-side).",
+            "blocked_by": "output",
+            "firewall": firewall.model_dump(),
+        })
+
+    # Soft findings (PII / credit-card / email) → redact in place, don't block
+    if raw_findings:
+        response.reply = redact(response.reply, raw_findings)
+
     response.firewall = FirewallVerdict(
         overall="pass", blocked_by=None,
-        l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2,
+        l1a=fw_l1a, l1b=fw_l1b, l2=fw_l2, output=output_result,
     )
     return response
 

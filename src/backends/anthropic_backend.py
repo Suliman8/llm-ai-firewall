@@ -19,14 +19,17 @@ class AnthropicBackend(Backend):
         key = settings.anthropic_api_key
         return bool(key) and not key.startswith("sk-ant-replace")
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
+    async def chat(self, request: ChatRequest, system_prompt: str = "") -> ChatResponse:
         model = request.model or self.default_model
-        message = await self.client.messages.create(
+        kwargs: dict = dict(
             model=model,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
             messages=[{"role": "user", "content": request.prompt}],
         )
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        message = await self.client.messages.create(**kwargs)
         text = "".join(b.text for b in message.content if hasattr(b, "text"))
         return ChatResponse(
             backend="anthropic",

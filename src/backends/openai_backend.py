@@ -19,11 +19,15 @@ class OpenAIBackend(Backend):
         key = settings.openai_api_key
         return bool(key) and not key.startswith("sk-replace")
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
+    async def chat(self, request: ChatRequest, system_prompt: str = "") -> ChatResponse:
         model = request.model or self.default_model
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": request.prompt})
         completion = await self.client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": request.prompt}],
+            messages=messages,
             max_tokens=request.max_tokens,
             temperature=request.temperature,
         )
